@@ -1,0 +1,1077 @@
+---
+title: "Estimating Parameters from Real Data"
+author: "Perrin Grant"
+date: "2026-06-02"
+output: html_document
+---
+
+### Setting up
+
+Recommend running the below code to clear the current R environment.
+
+```{r setup, message=FALSE, warning=FALSE}
+
+# Clear R memory
+rm(list=ls())
+# Clear console
+cat("\014")
+# Try to clear plots if there are any
+try(dev.off(dev.list()["RStudioGD"]), silent=TRUE)
+
+```
+
+Import all the libraries needed for analysis. 
+
+```{r libraries, message=FALSE, warning=FALSE, results='hide'}
+
+# Custom function to install libraries if not installed already, then load
+load_library <- function(pkg){
+  if (!suppressWarnings(require(pkg, character.only = TRUE, quietly = TRUE))) {
+    if (pkg %in% c("rhdf5", "rhdf5filters", "HDF5Array", "SingleCellExperiment")) {
+      if (!requireNamespace("BiocManager", quietly = TRUE)) {
+        install.packages("BiocManager")
+      }
+      BiocManager::install(pkg, update = FALSE, ask = FALSE)
+    } else {
+      install.packages(pkg, dependencies = TRUE)
+    }
+    suppressWarnings(library(pkg, character.only = TRUE, quietly = TRUE))
+  }
+}
+
+# Library for handling Seurat object files
+load_library("SeuratObject")
+load_library("Seurat")
+
+# Library for handling large matrices
+load_library("Matrix")
+
+# Library for printing f-string-like outputs in R
+load_library("glue")
+
+# For visualising and saving tables
+load_library("knitr")
+load_library("kableExtra")
+load_library("webshot2")
+
+# For colour-blind friendly colour palettes 
+load_library("RColorBrewer")
+# Library for graphs
+load_library("ggplot2")
+
+# gridExtra to control plot layout on page
+load_library("grid")
+load_library("gridExtra")
+
+# Library to make audible noise
+load_library("beepr")
+
+# Library to create heatmaps
+load_library("pheatmap")
+# Libraries for UpSet plot
+load_library("UpSetR")
+load_library("ComplexUpset")
+# Load API to access STRING
+load_library("rbioapi")
+# Library to convert STRING image arrays into PNGs
+load_library("png")
+
+# Custom function for estimating parameters
+nb_estimate <- dget("../3_Real_Data/estimator_function.R")
+
+format_time <- function(dt) {
+  #' Function to convert system time into human readable format (h/m/s)
+  secs <- as.numeric(dt, units = "secs")
+  h <- floor(secs / 3600)
+  m <- floor((secs %% 3600) / 60)
+  s <- round(secs %% 60)
+  if (h > 0) {
+    sprintf("%dh %dm %ds", h, m, s)
+  } else if (m > 0) {
+    sprintf("%dm %ds", m, s)
+  } else {
+    sprintf("%ds", s)
+  }
+}
+
+```
+### Preparing Data
+
+First load RDS file downloaded from [https://zenodo.org/records/14511579](https://zenodo.org/records/14511579). This is an R formatted cell by gene matrix including all the metadata needed for this study, so minimal changes are needed.
+
+```{r load_data, message=FALSE, warning=FALSE}
+
+# If none of the files saved on disk
+if (!all(
+  file.exists("../3_Real_Data/filt_count_mat.rds"),
+  file.exists("../3_Real_Data/filt_meta_cell.rds"),
+  file.exists("../3_Real_Data/filt_patient_data.csv")
+)) {
+  
+  # Read raw data file
+  data <- readRDS(
+    "../3_Real_Data/merged_tissue_cluster_update_filt_other_mal_4.RDS")
+  
+  # Create map to rename cancers to be more human friendly
+  cancer_map <- c(
+    "Melanoma_derived_brain_metastases" = "Brain",
+    "Basal_Cell_Carcinoma"              = "Carcinoma",
+    "Melanoma"                          = "Melanoma",
+    "HER2+"                             = "Breast_(HER2+)",
+    "TNBC"                              = "Breast_(TNBC)",
+    "ER+"                               = "Breast_(ER+)",
+    "HCC"                               = "Liver_(HCC)",
+    "iCCA"                              = "Liver_(iCCA)",
+    "ccRCC"                             = "Kidney"
+  )
+}
+
+```
+
+One additional data point needed is the relative sequencing depth of each cell. This is used to standardise the count data from each cell to correct for different sequencing depths. The relative depth is estimated to be the total number of sequences of each cell divided by the mean across all cells. This is then standardised to be between 0 and 0.3 which is the expected range of sequencing depths.
+
+This analysis will compare gene expression across:
+
+* Cancer types (of which there are 9 in this study).
+* Before and after ICB therapy (pre vs post).
+
+Combinations of these labels result in 8 different cell classifications (pre and post in each cancer type. Every cell in the data set is assigned to one of these categories so that differences between them can be compared. 
+
+
+```{r meta_table, warning=FALSE}
+
+if (!(file.exists("../3_Real_Data/filt_count_mat.rds") && 
+      file.exists("../3_Real_Data/filt_meta_cell.rds"))) {
+
+  # Extract the parameters that will be used for this study
+  # Cell will always be needed for any study
+  # Cancer type will likely be of interest for comparisons in most studies
+  # id and pre-post are specific to this study
+  meta_cell <- data.frame(
+    cell        = colnames(data),
+    id          = data$donor_id,
+    cancer_type = data$Cancer_type,
+    pre_post    = data$pre_post,
+    stringsAsFactors = FALSE
+  )
+  
+  # Apply new names
+  meta_cell$cancer_type <- cancer_map[meta_cell$cancer_type]
+  
+  # Create a matrix of all count data
+  count_mat <- data[["RNA"]]@counts
+  
+  # Label each cell based on what cancer-treatment combination it matches
+  meta_cell$group_label <- paste0(meta_cell$cancer_type, "_", meta_cell$pre_post)
+  # Create a list of these groups
+  group_levels <- unique(meta_cell$group_label)
+  
+  # Save number of genes
+  G <- nrow(count_mat)
+  # Save number of cells
+  C <- ncol(count_mat)
+}
+
+```
+
+```{r cell_clean, warning=FALSE}
+
+if (!(file.exists("../3_Real_Data/filt_count_mat.rds") && 
+      file.exists("../3_Real_Data/filt_meta_cell.rds"))) {
+
+  # Count nonzeroes per column
+  nonzero_per_cell <- diff(count_mat@p)
+  # Calculate zero proportion per cell
+  cell_zero_global <- (G - nonzero_per_cell) / G
+  # Check what the distribution of proportions look like
+  cell_zero_summary <- data.frame(as.list(summary(cell_zero_global)))
+  cell_zero_summary
+  
+  # Clean cells
+  # Since low quality, will exclude above 95%
+  cells_to_keep <- cell_zero_global <= 0.95
+
+  # Apply cell filter
+  count_mat_a <- count_mat[, cells_to_keep]
+  meta_cell_a <- meta_cell[cells_to_keep, ]
+
+  message("Removed ", sum(!cells_to_keep),
+          " cells (global zero proportion > 95%).")
+
+  # Recompute group labels AFTER cell filtering 
+  group_levels_a <- unique(meta_cell_a$group_label)
+  
+  # Save the summary table
+  save_kable(
+    kable(cell_zero_summary, format = "html") %>%
+      kable_styling(full_width = FALSE, bootstrap_options = "bordered"),
+    "../3_Real_data/figs/tab_1.png",
+    zoom = 2
+  )
+
+} else {
+  
+  if (file.exists("../3_Real_data/figs/tab_1.png")){
+    # Display the table
+    knitr::include_graphics("../3_Real_data/figs/tab_1.png")
+  }
+}
+
+```
+
+```{r gene_clean, warning=FALSE}
+
+if (!(file.exists("../3_Real_Data/filt_count_mat.rds") && 
+      file.exists("../3_Real_Data/filt_meta_cell.rds"))) {  
+  
+  # Check gene means  
+  nonzero_per_gene <- Matrix::rowSums(count_mat_a != 0)
+  gene_zero_global <- 1 - (nonzero_per_gene / ncol(count_mat_a))
+  # Check what the distribution of proportions look like
+  gene_zero_summary <- data.frame(as.list(summary(gene_zero_global)))
+  gene_zero_summary
+  
+  # Calculate proportion by group
+  gene_zero_prop_by_group <- sapply(group_levels_a, function(g) {
+    cols_g <- meta_cell_a$group_label == g
+    ng <- sum(cols_g)
+    
+    # number of nonzero counts per gene in this group
+    nz <- Matrix::rowSums(count_mat_a[, cols_g, drop = FALSE] != 0)
+
+    # proportion of zeroes
+    1 - (nz / ng)
+  })
+  
+  # Mark genes to keep
+  genes_to_keep <- apply(gene_zero_prop_by_group <= 0.95, 1, all)
+
+  message("Removed ", sum(!genes_to_keep),
+          " genes (>95% zeroes in at least one group).")
+
+
+  # Apply gene filter
+  count_mat_b <- count_mat_a[genes_to_keep, ]
+  meta_cell_b <- meta_cell_a
+
+  # Remove patients lacking both Pre and Post cells
+  tab <- table(meta_cell_b$id, meta_cell_b$pre_post)
+  valid_ids <- rownames(tab)[tab[, "Pre"] > 0 & tab[, "Post"] > 0]
+  # Apply filter
+  filt_meta_cell <- meta_cell_b[meta_cell_b$id %in% valid_ids, ]
+  filt_count_mat <- count_mat_b[, filt_meta_cell$cell]
+
+  ## Final group labels
+  filt_meta_cell$group_label <- paste0(
+    filt_meta_cell$cancer_type, "_", filt_meta_cell$pre_post
+  )
+  
+  # Save the summary table
+  save_kable(
+    kable(gene_zero_summary, format = "html") %>%
+      kable_styling(full_width = FALSE, bootstrap_options = "bordered"),
+    "../3_Real_Data/figs/tab_2.png",
+    zoom = 2
+  )
+
+  ## Save results
+  saveRDS(filt_count_mat, "../3_Real_Data/filt_count_mat.rds")
+  saveRDS(filt_meta_cell, "../3_Real_Data/filt_meta_cell.rds")
+  
+} else {
+  
+  if (file.exists("../3_Real_Data/figs/tab_2.png")){
+    # Display the table
+    knitr::include_graphics("../3_Real_Data/figs/tab_2.png")
+  }
+  
+  filt_count_mat <- readRDS("../3_Real_Data/filt_count_mat.rds")
+  filt_meta_cell <- readRDS("../3_Real_Data/filt_meta_cell.rds")
+}
+ 
+# Create list of group labels based on filtered data
+group_levels_filt <- unique(filt_meta_cell$group_label)
+
+# Split filtered matrix
+mat_list <- lapply(group_levels_filt, function(g) {
+  cols <- filt_meta_cell$group_label == g
+  filt_count_mat[, cols, drop = FALSE]
+})
+
+names(mat_list) <- group_levels_filt
+
+```
+
+```{r seq_depth, message=FALSE, warning=FALSE}
+
+# Estimate q value for each remaining cell:
+seq_sum  <- colSums(filt_count_mat)
+
+seq_depth <-  (seq_sum / mean(seq_sum))  # RELATIVE seq depth
+seq_depth <-  0.3*(seq_depth/max(seq_depth)) # relative seq depth 0-0.3
+
+# Create a list of sequencing depths for each group
+seq_depth_list <- lapply(group_levels_filt, function(g) {
+  cols <- filt_meta_cell$group_label == g
+  seq_depth[cols]
+})
+
+names(seq_depth_list) <- group_levels_filt
+
+
+```
+
+```{r estimate_function, warning=FALSE}
+
+# Create a list of all genes
+genes = rownames(filt_count_mat)
+
+# Create a function that will let each matrix be input seperately 
+# and results table created
+generate_estimates <- function(mat, seq_depth = NULL, 
+                               save_df = FALSE, filename = NULL){
+  #' Function to create results table of gene parameter estimates for a 
+  #' given matrix, with option to save table.
+  
+  # Make note of start time
+  t_0 <- Sys.time()
+  
+  # Estimate parameters and errors
+  ests <- nb_estimate(mat,
+                      seq_depth = seq_depth,
+                      rmse = TRUE,
+                      size_rmse_file = "../2_Simulations/error_fit_size.rds",
+                      prob_rmse_file = "../2_Simulations/error_fit_prob.rds")
+  # Save estimates to table
+  est_df <- data.frame(
+    genes      = genes,
+    r_est      = ests$r_est,
+    p_est      = ests$p_est,
+    r_rmse     = ests$r_rmse,
+    p_rmse     = ests$p_rmse,
+    zero_prop  = ests$zero_prop 
+  )
+  # If save is TRUE
+  if (save_df) {
+    # If no file name specified
+    if (is.null(filename)){
+      # Name after matrix
+      filename = deparse(substitute(mat))
+    } 
+    
+    # Save table to correct folder
+    write.csv(est_df,
+              paste0("../3_Real_Data/",filename), 
+              row.names = FALSE)
+  }
+  # Make not of end time
+  t_1 <- Sys.time()
+  # Print complete
+  print(glue("{length(genes)} genes took {format_time(t_1-t_0)} to run"))
+  
+  # Return the results table
+  return(est_df) 
+}
+  
+```
+``` {r estimate_car_pre, warning = FALSE}
+
+if (!file.exists("../3_Real_Data/results/car_pre.csv")){ 
+  
+  res_car_pre <- generate_estimates(mat       = mat_list$Carcinoma_Pre,
+                                    seq_depth = seq_depth_list$Carcinoma_Pre, 
+                                    save_df   = TRUE, 
+                                    filename  = "results/car_pre.csv")
+  beep(5)
+  
+} else {
+  
+  res_car_pre <- read.csv("../3_Real_Data/results/car_pre.csv")
+}
+
+```
+other tables hidden as just repeats. They were run separately purely to save computer from having issues from large analysis runs continuously. If running on server could probably run all in a loop, or instead add breaks and quality checks between each loop. I already killed my laptop giving it too much to do so I chose to run separately to avoid damaging my last available personal computer.
+
+#### Time Taken for Each Group:
+
+**Carcinoma:**
+* **Pre:** 30m 8s
+* **Post:** 40m 59s
+
+**Breast (HER2+):**
+* **Pre:** 3m 44s
+* **Post:** 17m 28s
+
+**Breast (TNBC):**
+* **Pre:** 46m 28s 
+* **Post:** 1h 7m 49s
+
+**Breast (ER+)**
+* **Pre:** 1h 7m 35s
+* **Post:** 1h 8m 16s
+
+``` {r estimate_car_post, echo=FALSE, warning=FALSE, results='asis'}
+
+if (!file.exists("../3_Real_Data/results/car_post.csv")){ 
+  
+  res_car_post <- generate_estimates(mat      = mat_list$Carcinoma_Post,
+                                    seq_depth = seq_depth_list$Carcinoma_Post, 
+                                    save_df   = TRUE, 
+                                    filename  = "results/car_post.csv")
+  beep(5)
+  
+} else {
+  
+  res_car_post <- read.csv("../3_Real_Data/results/car_post.csv")
+}
+
+```
+``` {r estimate_breast_h_pre, echo=FALSE, warning=FALSE, results='asis'}
+
+if (!file.exists("../3_Real_Data/results/breast_h_pre.csv")){ 
+  
+  res_breast_h_pre <- generate_estimates(mat  = mat_list$`Breast_(HER2+)_Pre`,
+                                    seq_depth = 
+                                      seq_depth_list$`Breast_(HER2+)_Pre`, 
+                                    save_df   = TRUE, 
+                                    filename  = "results/breast_h_pre.csv")
+  beep(5)
+  
+} else {
+  
+  res_breast_h_pre <- read.csv("../3_Real_Data/results/breast_h_pre.csv")
+}
+
+```
+``` {r estimate_breast_h_post, echo=FALSE, warning=FALSE, results='asis'}
+
+if (!file.exists("../3_Real_Data/results/breast_h_post.csv")){ 
+  
+  res_breast_h_post <- generate_estimates(mat = mat_list$`Breast_(HER2+)_Post`,
+                                    seq_depth = 
+                                      seq_depth_list$`Breast_(HER2+)_Post`, 
+                                    save_df   = TRUE, 
+                                    filename  = "results/breast_h_post.csv")
+  beep(5)
+  
+} else {
+  
+  res_breast_h_post <- read.csv("../3_Real_Data/results/breast_h_post.csv")
+}
+
+```
+``` {r estimate_breast_t_pre, echo=FALSE, warning=FALSE, results='asis'}
+
+if (!file.exists("../3_Real_Data/results/breast_t_pre.csv")){ 
+  
+  res_breast_t_pre <- generate_estimates(mat  = mat_list$`Breast_(TNBC)_Pre`,
+                                    seq_depth = 
+                                      seq_depth_list$`Breast_(TNBC)_Pre`, 
+                                    save_df   = TRUE, 
+                                    filename  = "results/breast_t_pre.csv")
+  beep(5)
+  
+} else {
+  
+  res_breast_t_pre <- read.csv("../3_Real_Data/results/breast_t_pre.csv")
+}
+
+```
+``` {r estimate_breast_t_post, echo=FALSE, warning=FALSE, results='asis'}
+
+if (!file.exists("../3_Real_Data/results/breast_t_post.csv")){ 
+  
+  res_breast_t_post <- generate_estimates(mat = mat_list$`Breast_(TNBC)_Post`,
+                                    seq_depth = 
+                                      seq_depth_list$`Breast_(TNBC)_Post`, 
+                                    save_df   = TRUE, 
+                                    filename  = "results/breast_t_post.csv")
+  beep(5)
+  
+} else {
+  
+  res_breast_t_post <- read.csv("../3_Real_Data/results/breast_t_post.csv")
+}
+
+```
+``` {r estimate_breast_e_pre, echo=FALSE, warning=FALSE, results='asis'}
+
+if (!file.exists("../3_Real_Data/results/breast_e_pre.csv")){ 
+  
+  res_breast_e_pre <- generate_estimates(mat  = mat_list$`Breast_(ER+)_Pre`,
+                                    seq_depth = 
+                                      seq_depth_list$`Breast_(ER+)_Pre`, 
+                                    save_df   = TRUE, 
+                                    filename  = "results/breast_e_pre.csv")
+  beep(5)
+  
+} else {
+  
+  res_breast_e_pre <- read.csv("../3_Real_Data/results/breast_e_pre.csv")
+}
+
+```
+``` {r estimate_breast_e_post, echo=FALSE, warning=FALSE, results='asis'}
+
+if (!file.exists("../3_Real_Data/results/breast_e_post.csv")){ 
+  
+  res_breast_e_post <- generate_estimates(mat = mat_list$`Breast_(ER+)_Post`,
+                                    seq_depth = 
+                                      seq_depth_list$`Breast_(ER+)_Post`, 
+                                    save_df   = TRUE, 
+                                    filename  = "results/breast_e_post.csv")
+  beep(5)
+  
+} else {
+  
+  res_breast_e_post <- read.csv("../3_Real_Data/results/breast_e_post.csv")
+}
+
+```
+```{r res_check, message=FALSE, warning=FALSE}
+
+res_names <- c(
+  "res_car_pre",
+  "res_car_post",
+  "res_breast_h_pre",
+  "res_breast_h_post",
+  "res_breast_t_pre",
+  "res_breast_t_post",
+  "res_breast_e_pre",
+  "res_breast_e_post"
+)
+
+res_table <- mget(res_names)
+
+for (n in names(res_table)) {
+  df <- res_table[[n]]
+
+  nm <- sub("^res_", "", n)     # remove "res_"
+  parts <- strsplit(nm, "_")[[1]]
+
+  time   <- parts[length(parts)]
+  cancer <- paste(parts[-length(parts)], collapse = "_")
+
+  df$cancer <- cancer
+  df$time   <- time
+
+  res_table[[n]] <- df
+}
+
+res_table <- do.call(rbind, res_table)
+
+cancer_map_res <- c(
+  "car"      = "Carcinoma",
+  "breast_h" = "Breast_(HER2+)",
+  "breast_t" = "Breast_(TNBC)",
+  "breast_e" = "Breast_(ER+)"
+)
+
+# Apply new names
+res_table$cancer <- cancer_map_res[res_table$cancer]
+
+for (n in res_names) {
+  df <- get(n)
+
+  # parse cancer + time again for printing
+  nm <- sub("^res_", "", n)
+  parts <- strsplit(nm, "_")[[1]]
+
+  time   <- parts[length(parts)]
+  cancer <- paste(parts[-length(parts)], collapse = "_")
+
+  cancer_pretty <- cancer_map_res[cancer]
+  label <- paste0(cancer_pretty, "_", time)
+
+  n_complete <- sum(complete.cases(df))
+  rm(df)
+  print(glue("{label}:  \t{n_complete} genes estimated"))
+}
+
+```
+
+```{r res_clean, message=FALSE, warning=FALSE}
+
+genes_to_remove <- unique(res_table$genes[!complete.cases(res_table)])
+
+res_table <- res_table[!res_table$genes %in% genes_to_remove, ]
+
+print(glue(
+  "Removed {length(genes_to_remove)} genes from data for incomplete estimates"
+  ))
+
+```
+```{r burst_calc, message=FALSE, warning=FALSE}
+
+res_table$k_est  <- res_table$r_est
+res_table$k_rmse <- res_table$r_rmse
+res_table$b_est  <- (1 - res_table$p_est) / res_table$p_est
+res_table$b_rmse <- res_table$p_rmse / (res_table$p_est^2)
+
+```
+
+```{r analysis_func, message=FALSE, warning=FALSE}
+
+pairwise_test <- function(df1, df2) {
+  #' Function to calculate test statistics for k (rate at which a gene 
+  #' switches from off to on) and b (burst size, how many copies created while 
+  #' on) between pre and post treatment for a cancer. Also calculates 
+  #' proportional fold-change in estimated k and b as well as direction.
+  
+  # merge by gene
+  m <- merge(df1, df2, by = "genes", suffixes = c("_1", "_2"))
+
+  # k differences
+  dk  <- m$k_est_2/m$k_est_1
+  sek <- sqrt(m$k_rmse_1^2 + m$k_rmse_2^2)
+  zk  <- (m$k_est_1 - m$k_est_2) / sek
+
+  # b differences
+  db  <- m$b_est_2/m$b_est_1
+  seb <- sqrt(m$b_rmse_1^2 + m$b_rmse_2^2)
+  zb  <- (m$b_est_1 - m$b_est_2) / seb
+
+  # direction
+  k_dir <- ifelse(dk > 1, 1, ifelse(dk < 1, -1, 0))
+  b_dir <- ifelse(db > 1, 1, ifelse(db < 1, -1, 0))
+
+  data.frame(
+    genes  = m$genes,
+    cancer = df1$cancer,
+    diff_k = dk,
+    z_k    = zk,
+    k_dir  = k_dir,
+    diff_b = db,
+    z_b    = zb,
+    b_dir  = b_dir,
+    stringsAsFactors = FALSE
+  )
+}
+
+
+```
+
+```{r pairwise analysis, message=FALSE, warning=FALSE}
+
+pairwise_results <- list()
+
+pairwise_results$Carcinoma <- pairwise_test(
+  res_table[res_table$cancer == "Carcinoma"      & res_table$time == "pre", ],
+  res_table[res_table$cancer == "Carcinoma"      & res_table$time == "post", ]
+  )
+pairwise_results$"Breast_(HER2+)" <- pairwise_test(
+  res_table[res_table$cancer == "Breast_(HER2+)" & res_table$time == "pre", ],
+  res_table[res_table$cancer == "Breast_(HER2+)" & res_table$time == "post", ]
+  )
+pairwise_results$"Breast_(TNBC)" <- pairwise_test(
+  res_table[res_table$cancer == "Breast_(TNBC)"  & res_table$time == "pre", ],
+  res_table[res_table$cancer == "Breast_(TNBC)"  & res_table$time == "post", ]
+  )
+pairwise_results$"Breast_(ER+)" <- pairwise_test(
+  res_table[res_table$cancer == "Breast_(ER+)"   & res_table$time == "pre", ],
+  res_table[res_table$cancer == "Breast_(ER+)"   & res_table$time == "post", ]
+  )
+
+pairwise_table <- do.call(rbind, pairwise_results)
+
+```
+
+```{r BH_corr, message=FALSE, warning=FALSE}
+
+pairwise_table$p_k <- 2 * pnorm(-abs(pairwise_table$z_k))
+pairwise_table$p_b <- 2 * pnorm(-abs(pairwise_table$z_b))
+
+pairwise_table$p_k_adj <- p.adjust(pairwise_table$p_k, method = "BH")
+pairwise_table$p_b_adj <- p.adjust(pairwise_table$p_b, method = "BH")
+
+pairwise_results <- split(pairwise_table, pairwise_table$cancer)
+  
+```
+
+```{r heatmaps_all, message=FALSE, warning=FALSE}
+
+make_fc_matrix <- function(df_list, value_col) {
+  all_genes <- unique(unlist(lapply(df_list, function(x) x$genes)))
+  cancers   <- names(df_list)
+
+  mat <- matrix(NA, nrow = length(all_genes), ncol = length(cancers),
+                dimnames = list(all_genes, cancers))
+
+  for (c in cancers) {
+    df <- df_list[[c]]
+    mat[df$genes, c] <- df[[value_col]]
+  }
+
+  mat
+}
+
+k_fc_mat <- log2(make_fc_matrix(pairwise_results, "diff_k"))
+b_fc_mat <- log2(make_fc_matrix(pairwise_results, "diff_b"))
+
+# --- MASTER ROW ORDER (from full b matrix) ---
+row_order_full <- hclust(dist(b_fc_mat))$order
+genes_full_ordered <- rownames(b_fc_mat)[row_order_full]
+cancers_ordered <- colnames(b_fc_mat)
+
+# Apply to full matrices
+k_fc_mat <- k_fc_mat[genes_full_ordered, ]
+b_fc_mat <- b_fc_mat[genes_full_ordered, ]
+
+k_lim <- max(abs(log2(pairwise_table$diff_k)))
+b_lim <- max(abs(log2(pairwise_table$diff_b)))
+
+# Set colours to colour blind friendly palette
+upset_pal <- brewer.pal(2, "Dark2")
+upset_col <- colorRampPalette(c(upset_pal[2], "white", upset_pal[1]))(50)
+breaks_k  <- seq(-k_lim, k_lim, length.out = 50)
+breaks_b  <- seq(-b_lim, b_lim, length.out = 50)
+
+
+pheatmap(k_fc_mat,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         show_rownames = FALSE,
+         color = upset_col,
+         breaks = breaks_k,
+         main = "Fold-change in k (log2) — Pre vs Post Treatment")
+pheatmap(b_fc_mat,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         show_rownames = FALSE,
+         color = upset_col,
+         breaks = breaks_b,
+         main = "Fold-change in b (log2) — Pre vs Post Treatment")
+
+```
+```{r heatmaps_sig, message=FALSE, warning=FALSE}
+
+### --- SIGNIFICANT K MATRIX ---
+
+sig_k_genes <- unique(pairwise_table$genes[pairwise_table$p_k_adj < 0.05])
+sig_k_table <- pairwise_table[pairwise_table$genes %in% sig_k_genes, ]
+
+# Mask non-significant values (few genes significant across cancers)
+sig_k_table$diff_k <- ifelse(
+  sig_k_table$p_k_adj < 0.05,
+  sig_k_table$diff_k,
+  1
+)
+
+sig_k_list <- split(sig_k_table, sig_k_table$cancer)
+sig_k_mat <- log2(make_fc_matrix(sig_k_list, "diff_k"))
+
+# Order only the sig_k genes using the full-matrix order
+sig_k_order <- genes_full_ordered[genes_full_ordered %in% sig_k_genes]
+sig_k_mat <- sig_k_mat[sig_k_order, cancers_ordered]
+
+### --- SIGNIFICANT B MATRIX ---
+
+sig_b_genes <- unique(pairwise_table$genes[pairwise_table$p_b_adj < 0.05])
+sig_b_table <- pairwise_table[pairwise_table$genes %in% sig_b_genes, ]
+
+# Mask non-significant values (few genes significant across cancers)
+sig_b_table$diff_b <- ifelse(
+  sig_b_table$p_b_adj < 0.05,
+  sig_b_table$diff_b,
+  1
+)
+
+sig_b_list <- split(sig_b_table, sig_b_table$cancer)
+sig_b_mat <- log2(make_fc_matrix(sig_b_list, "diff_b"))
+
+# Order only the sig_b genes using the full-matrix order
+sig_b_order <- genes_full_ordered[genes_full_ordered %in% sig_b_genes]
+sig_b_mat <- sig_b_mat[sig_b_order, cancers_ordered]
+
+### --- PLOTTING ---
+
+pheatmap(sig_k_mat,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         show_rownames = FALSE,
+         color = upset_col,
+         breaks = breaks_k,
+         main = "Fold-change in k (log2) — Significant Genes")
+
+pheatmap(sig_b_mat,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         show_rownames = FALSE,
+         color = upset_col,
+         breaks = breaks_b,
+         main = "Fold-change in b (log2) — Significant Genes")
+
+```
+
+```{r upset, message=FALSE, warning=FALSE}
+
+sig_k_only <- sig_k_table[sig_k_table$p_k_adj < 0.05, ]
+
+listInput_k <- list(
+  Carcinoma        = sig_k_only$genes[
+    sig_k_only$cancer == "Carcinoma"],
+  'Breast_(HER2+)' = sig_k_only$genes[
+    sig_k_only$cancer == "Breast_(HER2+)"],
+  'Breast_(TNBC)'  = sig_k_only$genes[
+    sig_k_only$cancer == "Breast_(TNBC)"],
+  'Breast_(ER+)'   = sig_k_only$genes[
+    sig_k_only$cancer == "Breast_(ER+)"]
+)
+
+sig_b_only <- sig_b_table[sig_b_table$p_b_adj < 0.05, ]
+
+listInput_b <- list(
+  Carcinoma        = sig_b_only$genes[
+    sig_b_only$cancer == "Carcinoma"],
+  'Breast_(HER2+)' = sig_b_only$genes[
+    sig_b_only$cancer == "Breast_(HER2+)"],
+  'Breast_(TNBC)'  = sig_b_only$genes[
+    sig_b_only$cancer == "Breast_(TNBC)"],
+  'Breast_(ER+)'   = sig_b_only$genes[
+    sig_b_only$cancer == "Breast_(ER+)"]
+)
+
+upset_df_k <- fromList(listInput_k)
+upset_df_b <- fromList(listInput_b)
+
+ComplexUpset::upset(
+  upset_df_k,
+  intersect = colnames(upset_df_k),
+  base_annotations = list(
+    'Intersection size' = intersection_size(
+      bar_color = "steelblue",
+      fill = "steelblue"
+    )
+  )
+) +
+  theme(
+    text = element_text(size = 14),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.background = element_rect(fill = "white"),
+    plot.background = element_rect(fill = "white")
+  )
+
+ComplexUpset::upset(
+  upset_df_b,
+  intersect = colnames(upset_df_b),
+  base_annotations = list(
+    'Intersection size' = intersection_size(
+      bar_color = "steelblue",
+      fill = "steelblue"
+    )
+  )
+) +
+  theme(
+    text = element_text(size = 14),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.background = element_rect(fill = "white"),
+    plot.background = element_rect(fill = "white")
+  )
+
+```
+
+```{r string_start, message=FALSE, warning=FALSE}
+
+mapped_string_genes <- rba_string_map_ids(
+  ids     = unique(c(sig_k_only$genes, sig_b_only$genes)),
+  species = 9606  
+)
+
+sig_k_only$stringId <- mapped_string_genes$stringId[ match(sig_k_only$genes, 
+                                           mapped_string_genes$queryItem) ]
+
+sig_b_only$stringId <- mapped_string_genes$stringId[ match(sig_b_only$genes, 
+                                           mapped_string_genes$queryItem) ]
+
+```
+
+```{r string_enrichment, message=FALSE, warning=FALSE}
+
+string_car_b_up <- sig_b_only$stringId[
+  sig_b_only$cancer == "Carcinoma" & 
+    !is.na(sig_b_only$stringId) &
+    sig_b_only$diff_b > 1
+]
+string_car_b_down <- sig_b_only$stringId[
+  sig_b_only$cancer == "Carcinoma" & 
+    !is.na(sig_b_only$stringId) &
+    sig_b_only$diff_b < 1
+]
+
+writePNG(rba_string_enrichment_image(
+  ids     = string_car_b_down,
+  species = 9606), 
+  "../3_Real_Data/figs/string_enrichment_b_car_down.png")
+
+writePNG(rba_string_enrichment_image(
+  ids     = string_car_b_up,
+  species = 9606), 
+  "../3_Real_Data/figs/string_enrichment_b_car_up.png")
+
+string_breast_h_b_up <- sig_b_only$stringId[
+  sig_b_only$cancer == "Breast_(HER2+)" & 
+    !is.na(sig_b_only$stringId) &
+    sig_b_only$diff_b > 1
+]
+
+writePNG(rba_string_enrichment_image(
+  ids     = string_breast_h_b_up,
+  species = 9606), 
+  "../3_Real_Data/figs/string_enrichment_b_breast_h_up.png")
+
+```
+
+```{r string_network, message=FALSE, warning=FALSE}
+
+# CARCINOMA -----
+# k param 
+string_car_k <- sig_k_only$stringId[
+  sig_k_only$cancer == "Carcinoma" & 
+    !is.na(sig_k_only$stringId)
+]
+
+writePNG(rba_string_network_image(
+  ids     = string_car_k,
+  species = 9606
+  ), 
+  "../3_Real_Data/figs/string_network_k_car.png")
+
+# BREAST HER2+ -----
+# b param upregulated
+string_breast_h_b_up <- sig_b_only$stringId[
+  sig_b_only$cancer == "Breast_(HER2+)" & 
+    !is.na(sig_b_only$stringId) &
+    sig_b_only$diff_b < 1
+]
+writePNG(rba_string_network_image(
+  ids     = string_breast_h_b_up,
+  species = 9606
+  ), 
+  "../3_Real_Data/figs/string_network_b_breast_h_down.png")
+
+# k param 
+string_breast_h_k <- sig_k_only$stringId[
+  sig_k_only$cancer == "Breast_(HER2+)" & 
+    !is.na(sig_k_only$stringId) 
+]
+writePNG(rba_string_network_image(
+  ids     = string_breast_h_k,
+  species = 9606
+  ), 
+  "../3_Real_Data/figs/string_network_k_breast_h.png")
+
+# BREAST TNBC -----
+# b param 
+string_breast_t_b <- sig_b_only$stringId[
+  sig_b_only$cancer == "Breast_(TNBC)" & 
+    !is.na(sig_b_only$stringId) 
+]
+writePNG(rba_string_network_image(
+  ids     = string_breast_t_b,
+  species = 9606
+  ), 
+  "../3_Real_Data/figs/string_network_b_breast_t.png")
+
+# k param 
+string_breast_t_k <- sig_k_only$stringId[
+  sig_k_only$cancer == "Breast_(TNBC)" & 
+    !is.na(sig_k_only$stringId) 
+]
+writePNG(rba_string_network_image(
+  ids     = string_breast_t_k,
+  species = 9606
+  ), 
+  "../3_Real_Data/figs/string_network_k_breast_t.png")
+
+# BREAST ER+ -----
+# no b param 
+
+# k param 
+string_breast_e_k <- sig_k_only$stringId[
+  sig_k_only$cancer == "Breast_(ER+)" & 
+    !is.na(sig_k_only$stringId) 
+]
+writePNG(rba_string_network_image(
+  ids     = string_breast_e_k,
+  species = 9606
+  ), 
+  "../3_Real_Data/figs/string_network_k_breast_t.png")
+```
+
+```{r sex_ethnic_analysis, message=FALSE, warning=FALSE, fig.width=12, fig.height=6}
+
+# If the patient information exists
+if (!file.exists("../3_Real_Data/filt_patient_data.csv")) {
+  
+  # Create new table of patient information
+  patient_table <- data.frame(
+    id          = data$donor_id,
+    cancer_type = data$Cancer_type,
+    outcome     = data$Combined_outcome,
+    sex         = data$Sex,
+    ethnicity   = data$self_reported_ethnicity_ontology_term_id,
+    stringsAsFactors = FALSE
+  )
+  
+  # Filter out repeated rows
+  patient_table <- unique(patient_table)
+  # Define valid IDs
+  valid_ids <- unique(filt_meta_cell$id)
+  # Remove any patients not in dataset
+  patient_table <- patient_table[patient_table$id %in% valid_ids, ]
+  
+  # Update cancer types to human readible format
+  patient_table$cancer_type <- cancer_map[ patient_table$cancer_type ]
+  
+  # Define ethnicity map for this dataset
+  ethnicity_map <- c(
+    "HANCESTRO:0005" = "European",
+    "HANCESTRO:0008" = "Asian",
+    "HANCESTRO:0568" = "African American",
+    "Unknown"        = "Unknown"
+  )
+  # Apply ethnicity mapping to meta_cell
+  patient_table$ethnicity <- ethnicity_map[ patient_table$ethnicity]
+  
+  # Save table
+  write.csv(patient_table, "../3_Real_Data/filt_patient_data.csv", row.names = FALSE)
+
+} else {
+  
+  # Open existing table
+  patient_table <- read.csv("../3_Real_Data/filt_patient_data.csv")
+}
+
+sex_plot <- ggplot(patient_table, aes(x = cancer_type, fill = sex)) +
+  geom_bar() +
+  theme_minimal(base_size = 14) +
+  scale_y_continuous(
+    limits = c(0, 20),
+    breaks = seq(0, 20, by = 5),        
+    minor_breaks = seq(0, 20, by = 1)    
+  ) +
+  theme(panel.grid.major = element_line(color = "grey40"),
+        panel.grid.minor = element_line(color = "grey70"),
+        panel.grid.major.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+ethnicity_plot <- ggplot(patient_table, aes(x = cancer_type, fill = ethnicity)) +
+  geom_bar() +
+  theme_minimal(base_size = 14) +
+  scale_y_continuous(
+    limits = c(0, 20),
+    breaks = seq(0, 20, by = 5),        
+    minor_breaks = seq(0, 20, by = 1)    
+  ) +
+  theme(panel.grid.major = element_line(color = "grey40"),
+        panel.grid.minor = element_line(color = "grey70"),
+        panel.grid.major.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+grid.arrange(sex_plot, ethnicity_plot, ncol = 2)
+
+
+```
+
+Breast (all): No sex information, but women more than 99% of cases so likely reflected. Ethnicity not reported, study took place in Belgium.
+Carcinoma: Little sex information, just says it involved 11 patients, both males and females. No ethnicity information, study took place in USA (Stanford?).
