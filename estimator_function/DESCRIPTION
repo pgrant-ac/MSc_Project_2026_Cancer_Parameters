@@ -1,0 +1,9 @@
+Package: estimator_function
+Title: Gene Expression Parameter Estimation
+Version: 0.0.1
+Authors@R: person("Perrin", role = c("aut", "cre"))
+Description: packages for estimating negative binomial and burst kinetic parameters of genes.
+License: MIT
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.3

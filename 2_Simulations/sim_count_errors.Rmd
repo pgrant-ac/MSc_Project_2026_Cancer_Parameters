@@ -49,8 +49,10 @@ load_library("gridExtra")
 load_library("quantreg")
 
 # Custom MLE function
-nb_mle <- dget("../2_Simulations/mle_function.R")
+load_library("devtools")
+devtools::load_all("../estimator_function")
 
+# Function to format system time for human legibility 
 format_time <- function(dt) {
   #' Function to convert system time into human readable format (h/m/s)
   secs <- as.numeric(dt, units = "secs")
@@ -186,10 +188,15 @@ if (!file.exists("../2_Simulations/figs/fig_0.png")) {
 knitr::include_graphics(c(
   "../2_Simulations/figs/fig_0.png"))
 
+```
+*Figure 0: Plot showing that the calculations accurately estimate the relationships between sequencing depths of cells based on corrupted gene count data.*
+
+```{r seq_depth_test, message=FALSE, warning=FALSE}
+
+seq_model <- lm(seq_depth ~ pred_depth)
+summary(seq_model)
 
 ```
-
-*Figure 0: Plot showing that the calculations accurately estimate the relationships between sequencing depths of cells based on corrupted gene count data.*
 
 ### Running the Simulation
 
@@ -243,7 +250,7 @@ if (!file.exists("../2_Simulations/simulation_df.csv")) {
     # While catching any warnings or errors
      fit_samples_perf <- withCallingHandlers(tryCatch({
        # Fit the sampled counts to a negative binomial using maximum likelihood
-       nb_mle(perf_vals)
+       nb_gene(perf_vals)
      },
      # Print out any error messages to highlight the problem
      error = function(e) {
@@ -268,7 +275,7 @@ if (!file.exists("../2_Simulations/simulation_df.csv")) {
      fit_samples_corr <- withCallingHandlers(tryCatch({
        # Fit the sampled counts to a negative binomial using maximum likelihood
        # This time use the PREDICTED sequencing depths
-       nb_mle(corr_vals, pred_depth[idx])
+       nb_gene(corr_vals, pred_depth[idx])
      },
      # Print out any error messages to highlight the problem
      error = function(e) {

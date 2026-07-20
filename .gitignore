@@ -5,7 +5,6 @@
 3_Real_Data/merged_tissue_cluster_update_filt_other_mal_4.RDS
 3_Real_Data/filt_count_mat.rds
 3_Real_Data/filt_meta_cell.rds
-*.html
 *.pdf
 .positai
 .h5ad

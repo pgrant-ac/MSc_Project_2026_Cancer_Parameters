@@ -6,7 +6,7 @@ output: html_document
 ---
 This code evaluates several methods for estimating the parameters of a negative binomial (NB) distribution under varying levels of available data. Gene expression counts in single‑cell RNA‑seq are well modelled by an NB distribution across cells, so by simulating true NB‑distributed gene counts and then attempting to recover their parameters with different estimators, we can directly assess the accuracy and robustness of each method.
 
-A major complication in RNA‑seq data is the variability in sequencing depth across cells. Most protocols capture only a fraction, often around 30%—of the molecules present in each cell. This thinning process can be modelled as binomial sampling applied independently to each gene count in a cell. The resulting count matrix therefore consists of NB‑distributed rows (genes) whose values are further thinned column‑wise (by cell) according to their relative sequencing depths. Because the observed counts no longer follow a standard NB distribution, traditional NB fitting methods fail unless the thinning process is explicitly incorporated into the estimation procedure.
+A major complication in RNA‑seq data is the variability in sequencing depth across cells. Most protocols capture only a fraction of the molecules present in each cell. This thinning process can be modelled as binomial sampling applied independently to each gene count in a cell. The resulting count matrix therefore consists of NB‑distributed rows (genes) whose values are further thinned column‑wise (by cell) according to their relative sequencing depths. Because the observed counts no longer follow a standard NB distribution, traditional NB fitting methods fail unless the thinning process is explicitly incorporated into the estimation procedure.
 
 To compare approaches, three different optimisation strategies were used to estimate the NB parameters while accounting for thinning:
 
@@ -105,7 +105,7 @@ If the file containing these numbers already exists then they will just be taken
 
 In this simulation there will be 1000 NB distributions estimated, one for each gene. A total of 5000 cells will be simulated, from which a random sample of 50-5000 will be used to estimate each gene's parameters. A matrix of the raw 'true' gene counts is created, then a second matrix with the corrupted 'observed' counts based on each cell's sequencing depth. From this matrix the sequencing depths can be estimated.
 
-```{r rng, message=FALSE, warning=FALSE, results = 'hide'}
+```{r rng, message=FALSE, warning=FALSE}
 
 # Set number of genes and cells to simulate
 genes = 1000
@@ -155,6 +155,39 @@ sum_depth  <- colSums(sim_mat_corr)
 pred_depth <-  (sum_depth / mean(sum_depth)) 
 # Assume a maximum depth of 0.3 (just changes scale, relative depth unchanged)
 pred_depth <-  0.3*(pred_depth/max(pred_depth)) 
+
+# If the comparison plot not already in file system
+if (!file.exists("../1_NB_Methods/figs/fig_0.png")) {
+  # Create a data frame so ggplot can access data
+  depth_df <- data.frame(
+    # Input real depths and predicted depths
+    seq_depth  = seq_depth,
+    pred_depth = pred_depth
+    )
+  
+  # Compare real and predicted depths by plotting
+  png("../1_NB_Methods/figs/fig_0.png",
+      width = 8, height = 5, units = "in", res = 600)
+  print(
+    ggplot(depth_df, aes(x = seq_depth, y = pred_depth)) +
+      geom_point(alpha = 0.5) +
+      theme_bw()
+    )
+  dev.off()
+}
+
+# Display the plot
+knitr::include_graphics(c(
+  "../1_NB_Methods/figs/fig_0.png"))
+
+```
+
+*Figure 0: Plot showing that the calculations accurately estimate the relationships between sequencing depths of cells based on corrupted gene count data.*
+
+```{r rng_summary, message=FALSE, warning=FALSE}
+
+seq_model <- lm(seq_depth ~ pred_depth)
+summary(seq_model)
 
 ```
 

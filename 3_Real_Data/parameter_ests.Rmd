@@ -77,7 +77,8 @@ load_library("rbioapi")
 load_library("png")
 
 # Custom function for estimating parameters
-nb_estimate <- dget("../3_Real_Data/estimator_function.R")
+load_library("devtools")
+devtools::load_all("../estimator_function")
 
 format_time <- function(dt) {
   #' Function to convert system time into human readable format (h/m/s)
@@ -99,9 +100,11 @@ format_time <- function(dt) {
 
 First load RDS file downloaded from [https://zenodo.org/records/14511579](https://zenodo.org/records/14511579). This is an R formatted cell by gene matrix including all the metadata needed for this study, so minimal changes are needed.
 
+This file takes a long time to load and filter later so if the filtered data already created then will just load that later.
+
 ```{r load_data, message=FALSE, warning=FALSE}
 
-# If none of the files saved on disk
+# If none of the files saved on disk (all need data to be created)
 if (!all(
   file.exists("../3_Real_Data/filt_count_mat.rds"),
   file.exists("../3_Real_Data/filt_meta_cell.rds"),
@@ -128,25 +131,28 @@ if (!all(
 
 ```
 
-One additional data point needed is the relative sequencing depth of each cell. This is used to standardise the count data from each cell to correct for different sequencing depths. The relative depth is estimated to be the total number of sequences of each cell divided by the mean across all cells. This is then standardised to be between 0 and 0.3 which is the expected range of sequencing depths.
+One additional thing needed is the relative sequencing depth of each cell. This is used to standardise the count data from each cell to correct for different sequencing depths. The relative depth is estimated to be the total number of sequences of each cell divided by the mean across all cells. This is then standardised to be between 0 and 0.3 to approximate the true range expected for sequencing depths.
 
 This analysis will compare gene expression across:
 
 * Cancer types (of which there are 9 in this study).
 * Before and after ICB therapy (pre vs post).
 
-Combinations of these labels result in 8 different cell classifications (pre and post in each cancer type. Every cell in the data set is assigned to one of these categories so that differences between them can be compared. 
+Combinations of these labels result in 2 different cell classifications (pre and post in each cancer type). Every cell in the data set is assigned to one of these categories so that differences between them can be compared. 
+
+This left the dataset with 8 groups, 4 cancers with both pre and post therapy sampled cells.
 
 
 ```{r meta_table, warning=FALSE}
 
+# If the data has not already been filtered
 if (!(file.exists("../3_Real_Data/filt_count_mat.rds") && 
       file.exists("../3_Real_Data/filt_meta_cell.rds"))) {
 
   # Extract the parameters that will be used for this study
   # Cell will always be needed for any study
   # Cancer type will likely be of interest for comparisons in most studies
-  # id and pre-post are specific to this study
+  # patient ID and pre-post are specific to this study
   meta_cell <- data.frame(
     cell        = colnames(data),
     id          = data$donor_id,
@@ -173,9 +179,12 @@ if (!(file.exists("../3_Real_Data/filt_count_mat.rds") &&
 }
 
 ```
+Now the data will be cleaned to remove poorly sequenced cells and genes from the data. Looking at the data the data is generally poor quality, with very high proportions of zeroes. Therefore, only cells with counts that are more than 95% zeroes will be excluded. Additionally, any gene with counts made up of more than 95% percent zeroes in any group will be removed from all groups so that the remaining gene parameters can be compared between all groups.
 
 ```{r cell_clean, warning=FALSE}
 
+
+# If the data has not already been filtered
 if (!(file.exists("../3_Real_Data/filt_count_mat.rds") && 
       file.exists("../3_Real_Data/filt_meta_cell.rds"))) {
 
@@ -185,6 +194,7 @@ if (!(file.exists("../3_Real_Data/filt_count_mat.rds") &&
   cell_zero_global <- (G - nonzero_per_cell) / G
   # Check what the distribution of proportions look like
   cell_zero_summary <- data.frame(as.list(summary(cell_zero_global)))
+  # Display
   cell_zero_summary
   
   # Clean cells
@@ -195,6 +205,7 @@ if (!(file.exists("../3_Real_Data/filt_count_mat.rds") &&
   count_mat_a <- count_mat[, cells_to_keep]
   meta_cell_a <- meta_cell[cells_to_keep, ]
 
+  # inform how many removed
   message("Removed ", sum(!cells_to_keep),
           " cells (global zero proportion > 95%).")
 
@@ -211,6 +222,7 @@ if (!(file.exists("../3_Real_Data/filt_count_mat.rds") &&
 
 } else {
   
+  # If a saved summary table of zero proportions across cells exists display it
   if (file.exists("../3_Real_data/figs/tab_1.png")){
     # Display the table
     knitr::include_graphics("../3_Real_data/figs/tab_1.png")
@@ -219,8 +231,14 @@ if (!(file.exists("../3_Real_Data/filt_count_mat.rds") &&
 
 ```
 
+*Table 1: Proportions of zeroes found in cells across whole data set.*
+
+After cleaning also remove any patients who didn't contribute cells both pre and post therapy. Final filtered data sets are saved to cut down on computational time for any repeated runs.
+
 ```{r gene_clean, warning=FALSE}
 
+
+# If the data has not already been filtered
 if (!(file.exists("../3_Real_Data/filt_count_mat.rds") && 
       file.exists("../3_Real_Data/filt_meta_cell.rds"))) {  
   
@@ -229,6 +247,7 @@ if (!(file.exists("../3_Real_Data/filt_count_mat.rds") &&
   gene_zero_global <- 1 - (nonzero_per_gene / ncol(count_mat_a))
   # Check what the distribution of proportions look like
   gene_zero_summary <- data.frame(as.list(summary(gene_zero_global)))
+  # Display
   gene_zero_summary
   
   # Calculate proportion by group
@@ -261,7 +280,7 @@ if (!(file.exists("../3_Real_Data/filt_count_mat.rds") &&
   filt_meta_cell <- meta_cell_b[meta_cell_b$id %in% valid_ids, ]
   filt_count_mat <- count_mat_b[, filt_meta_cell$cell]
 
-  ## Final group labels
+  # Final group labels
   filt_meta_cell$group_label <- paste0(
     filt_meta_cell$cancer_type, "_", filt_meta_cell$pre_post
   )
@@ -274,19 +293,22 @@ if (!(file.exists("../3_Real_Data/filt_count_mat.rds") &&
     zoom = 2
   )
 
-  ## Save results
+  # Save results
   saveRDS(filt_count_mat, "../3_Real_Data/filt_count_mat.rds")
   saveRDS(filt_meta_cell, "../3_Real_Data/filt_meta_cell.rds")
   
 } else {
   
+  # If files do exist then just load them
+  filt_count_mat <- readRDS("../3_Real_Data/filt_count_mat.rds")
+  filt_meta_cell <- readRDS("../3_Real_Data/filt_meta_cell.rds")
+  
+  # Also if zero proportions by gene table exists then show this
+  # Note this is already AFTER low quality cells removed
   if (file.exists("../3_Real_Data/figs/tab_2.png")){
     # Display the table
     knitr::include_graphics("../3_Real_Data/figs/tab_2.png")
   }
-  
-  filt_count_mat <- readRDS("../3_Real_Data/filt_count_mat.rds")
-  filt_meta_cell <- readRDS("../3_Real_Data/filt_meta_cell.rds")
 }
  
 # Create list of group labels based on filtered data
@@ -298,16 +320,21 @@ mat_list <- lapply(group_levels_filt, function(g) {
   filt_count_mat[, cols, drop = FALSE]
 })
 
+# Name the matrices based on their group
 names(mat_list) <- group_levels_filt
 
 ```
+Calculate the relative sequencing depth of the remaining cells.
 
 ```{r seq_depth, message=FALSE, warning=FALSE}
 
 # Estimate q value for each remaining cell:
+# Sum all the columns
 seq_sum  <- colSums(filt_count_mat)
 
+# Calculate:
 seq_depth <-  (seq_sum / mean(seq_sum))  # RELATIVE seq depth
+# Normalise:
 seq_depth <-  0.3*(seq_depth/max(seq_depth)) # relative seq depth 0-0.3
 
 # Create a list of sequencing depths for each group
@@ -316,10 +343,13 @@ seq_depth_list <- lapply(group_levels_filt, function(g) {
   seq_depth[cols]
 })
 
+# Assign sequencing depths to their respective group
 names(seq_depth_list) <- group_levels_filt
 
 
 ```
+
+Create a function that will return a table of negative binomial estimates for a given matrix of gene and cell counts. This utilises the custom function nb_matrix which returns a list of parameter estimates and error predictions while accounting for relative sequencing depth.
 
 ```{r estimate_function, warning=FALSE}
 
@@ -336,9 +366,12 @@ generate_estimates <- function(mat, seq_depth = NULL,
   # Make note of start time
   t_0 <- Sys.time()
   
-  # Estimate parameters and errors
-  ests <- nb_estimate(mat,
+  # Estimate parameters and errors using custom function
+  # NOTE use '?nb_matrix' to see documentation
+  ests <- nb_matrix(
+                      mat,
                       seq_depth = seq_depth,
+                      # Include error estimates
                       rmse = TRUE,
                       size_rmse_file = "../2_Simulations/error_fit_size.rds",
                       prob_rmse_file = "../2_Simulations/error_fit_prob.rds")
@@ -364,7 +397,7 @@ generate_estimates <- function(mat, seq_depth = NULL,
               paste0("../3_Real_Data/",filename), 
               row.names = FALSE)
   }
-  # Make not of end time
+  # Make note of end time
   t_1 <- Sys.time()
   # Print complete
   print(glue("{length(genes)} genes took {format_time(t_1-t_0)} to run"))
@@ -372,25 +405,32 @@ generate_estimates <- function(mat, seq_depth = NULL,
   # Return the results table
   return(est_df) 
 }
-  
+
 ```
+Use the above function on each filtered matrix. These take a long time so results are saved so as not to need re-runs. A sound (beep) is used to indicate when a run is done.
+
 ``` {r estimate_car_pre, warning = FALSE}
 
+# If file does not already exist
 if (!file.exists("../3_Real_Data/results/car_pre.csv")){ 
-  
+  # Use above function to run analysis
   res_car_pre <- generate_estimates(mat       = mat_list$Carcinoma_Pre,
                                     seq_depth = seq_depth_list$Carcinoma_Pre, 
                                     save_df   = TRUE, 
                                     filename  = "results/car_pre.csv")
+  # Make noise to alert user when done
   beep(5)
   
 } else {
   
+  # If file already exists then just load it
   res_car_pre <- read.csv("../3_Real_Data/results/car_pre.csv")
 }
 
 ```
-other tables hidden as just repeats. They were run separately purely to save computer from having issues from large analysis runs continuously. If running on server could probably run all in a loop, or instead add breaks and quality checks between each loop. I already killed my laptop giving it too much to do so I chose to run separately to avoid damaging my last available personal computer.
+other tables hidden as just repeats. They were run separately purely to save computer from having issues from large analysis runs continuously. If running on server could probably run all in a loop, or instead add breaks and quality checks between each loop. 
+
+(I already killed my laptop giving it too much to do earlier in this project so I chose to run these separately to avoid damaging my last available personal computer).
 
 #### Time Taken for Each Group:
 
@@ -409,6 +449,8 @@ other tables hidden as just repeats. They were run separately purely to save com
 **Breast (ER+)**
 * **Pre:** 1h 7m 35s
 * **Post:** 1h 8m 16s
+
+As these times show, even though all analysis is done on the same number of genes, the number of cells in each group plays a large part in the time taken to estimate parameters.
 
 ``` {r estimate_car_post, echo=FALSE, warning=FALSE, results='asis'}
 
@@ -528,8 +570,11 @@ if (!file.exists("../3_Real_Data/results/breast_e_post.csv")){
 }
 
 ```
+Once all done any genes that failed can be removed from all groups. Even with some cleaning steps some genes may fail if there aren't many cells in the group.
+
 ```{r res_check, message=FALSE, warning=FALSE}
 
+# Save all the result table names to a vector
 res_names <- c(
   "res_car_pre",
   "res_car_post",
@@ -541,25 +586,34 @@ res_names <- c(
   "res_breast_e_post"
 )
 
+# Create a list of all result tables
 res_table <- mget(res_names)
 
+# For each result table add the relevant metadata
 for (n in names(res_table)) {
   df <- res_table[[n]]
-
+  # Extract the cancer_time name
   nm <- sub("^res_", "", n)     # remove "res_"
+  # Split on the "_" 
   parts <- strsplit(nm, "_")[[1]]
-
+  # Take the last part as time (pre or post)
   time   <- parts[length(parts)]
+  # Cancer is everything EXCEPT the last part
+  # if multiple add "_" back (for the breast cancers)
   cancer <- paste(parts[-length(parts)], collapse = "_")
-
+  
+  # Add these as columns
   df$cancer <- cancer
   df$time   <- time
-
+  
+  # Update original data frame
   res_table[[n]] <- df
 }
 
+# Collapse all results into one data frame
 res_table <- do.call(rbind, res_table)
 
+# Create filtered map to only update remaining cancers
 cancer_map_res <- c(
   "car"      = "Carcinoma",
   "breast_h" = "Breast_(HER2+)",
@@ -570,6 +624,7 @@ cancer_map_res <- c(
 # Apply new names
 res_table$cancer <- cancer_map_res[res_table$cancer]
 
+# Do same to the original result tables
 for (n in res_names) {
   df <- get(n)
 
@@ -589,26 +644,42 @@ for (n in res_names) {
 }
 
 ```
+Clean results by removing any genes that failed to get estimates. This is mostly due to breast HER2+ having few cells compared to other groups, resulting in some genes failing. All other groups were complete. 
 
 ```{r res_clean, message=FALSE, warning=FALSE}
 
+# Remove any genes not found in every group
 genes_to_remove <- unique(res_table$genes[!complete.cases(res_table)])
-
 res_table <- res_table[!res_table$genes %in% genes_to_remove, ]
 
+# Print message to note how many removed
 print(glue(
   "Removed {length(genes_to_remove)} genes from data for incomplete estimates"
   ))
 
 ```
+Now negative binomial estimates are finalised, can convert them into burst kinetics. A gene's expression can be described by it's burstiness (b), or how many copies are typically transcribed, and it's likelihood of being off (k). Because only relative sequencing depth is used these estimates are also relative and cannot be taken as exact values. Another custom function is used to convert these, using the equations:
+
+k = r
+b = (1-p)/(p^2)
+
 ```{r burst_calc, message=FALSE, warning=FALSE}
 
-res_table$k_est  <- res_table$r_est
-res_table$k_rmse <- res_table$r_rmse
-res_table$b_est  <- (1 - res_table$p_est) / res_table$p_est
-res_table$b_rmse <- res_table$p_rmse / (res_table$p_est^2)
+# Use a custom function to calculate estimated burst parameters
+kb_res <- kb_calc(res_table$r_est, 
+                  res_table$p_est,
+                  res_table$r_rmse, 
+                  res_table$p_rmse)
+
+# Save burst parameters to results
+res_table$k_est  <- kb_res$k_est
+res_table$k_rmse <- kb_res$k_rmse
+res_table$b_est  <- kb_res$b_est
+res_table$b_rmse <- kb_res$b_rmse
 
 ```
+
+Now a pairwise analysis can be utilised to quantify the difference between pre and post treatment. This is done by assigning a z-score calculated by dividing the difference between estimates by the squareroot of the difference between the errors squared. The fold change and direction of change are also noted in a new results data frame.
 
 ```{r analysis_func, message=FALSE, warning=FALSE}
 
@@ -634,7 +705,8 @@ pairwise_test <- function(df1, df2) {
   # direction
   k_dir <- ifelse(dk > 1, 1, ifelse(dk < 1, -1, 0))
   b_dir <- ifelse(db > 1, 1, ifelse(db < 1, -1, 0))
-
+  
+  # Save result in new data frame
   data.frame(
     genes  = m$genes,
     cancer = df1$cancer,
@@ -650,163 +722,187 @@ pairwise_test <- function(df1, df2) {
 
 
 ```
+Apply the pairwise analysis to compare pre and post treatment in each cancer.
 
 ```{r pairwise analysis, message=FALSE, warning=FALSE}
 
+# Create list to save pairwise results in
 pairwise_results <- list()
 
+# Carcinoma
 pairwise_results$Carcinoma <- pairwise_test(
   res_table[res_table$cancer == "Carcinoma"      & res_table$time == "pre", ],
   res_table[res_table$cancer == "Carcinoma"      & res_table$time == "post", ]
   )
+#Breast (HER2+)
 pairwise_results$"Breast_(HER2+)" <- pairwise_test(
   res_table[res_table$cancer == "Breast_(HER2+)" & res_table$time == "pre", ],
   res_table[res_table$cancer == "Breast_(HER2+)" & res_table$time == "post", ]
   )
+#Breast (TNBC)
 pairwise_results$"Breast_(TNBC)" <- pairwise_test(
   res_table[res_table$cancer == "Breast_(TNBC)"  & res_table$time == "pre", ],
   res_table[res_table$cancer == "Breast_(TNBC)"  & res_table$time == "post", ]
   )
+#Breast (ER+)
 pairwise_results$"Breast_(ER+)" <- pairwise_test(
   res_table[res_table$cancer == "Breast_(ER+)"   & res_table$time == "pre", ],
   res_table[res_table$cancer == "Breast_(ER+)"   & res_table$time == "post", ]
   )
 
+# Collapse results lists into one table
 pairwise_table <- do.call(rbind, pairwise_results)
 
 ```
 
+To avoid the problem of multiple testing, the z-scores will be assigned p-values. The list of p-values will then undergo a Benjamin-Hochberg (BH) adjustment to give adjusted p-values to correct for the many tests being run and thereby control the false discovery rate. These adjusted p-values will indicate the likelihood of a z-score as extreme as observed.
+
 ```{r BH_corr, message=FALSE, warning=FALSE}
 
+# convert z-scores into p-values
 pairwise_table$p_k <- 2 * pnorm(-abs(pairwise_table$z_k))
 pairwise_table$p_b <- 2 * pnorm(-abs(pairwise_table$z_b))
 
+# Apply correction for multiple testing
 pairwise_table$p_k_adj <- p.adjust(pairwise_table$p_k, method = "BH")
 pairwise_table$p_b_adj <- p.adjust(pairwise_table$p_b, method = "BH")
 
+# Update pairwise results to match this information in list
 pairwise_results <- split(pairwise_table, pairwise_table$cancer)
-  
+
 ```
+Now genes that display significantly different expression have been identified, Some analysis can be done to identify any patterns. First, a heat map of fold change in all genes (Fig 1a) and significant genes (Fig 1b).
 
 ```{r heatmaps_all, message=FALSE, warning=FALSE}
 
+# Function to create a matrix containing the fold value of all genes
 make_fc_matrix <- function(df_list, value_col) {
+  # List of all genes
   all_genes <- unique(unlist(lapply(df_list, function(x) x$genes)))
+  # List of cancers
   cancers   <- names(df_list)
-
+  # Empty matrix gene x cancer in size
   mat <- matrix(NA, nrow = length(all_genes), ncol = length(cancers),
                 dimnames = list(all_genes, cancers))
-
+  # For each cancer retrieve fold values
   for (c in cancers) {
     df <- df_list[[c]]
     mat[df$genes, c] <- df[[value_col]]
   }
-
+  # Return the matrix
   mat
 }
 
+# Apply this function to create matrix for each parameter
+# Convert to log 2 for clarity
 k_fc_mat <- log2(make_fc_matrix(pairwise_results, "diff_k"))
 b_fc_mat <- log2(make_fc_matrix(pairwise_results, "diff_b"))
 
-# --- MASTER ROW ORDER (from full b matrix) ---
+# Define row order based on burstiness (more changes)
 row_order_full <- hclust(dist(b_fc_mat))$order
 genes_full_ordered <- rownames(b_fc_mat)[row_order_full]
 cancers_ordered <- colnames(b_fc_mat)
 
-# Apply to full matrices
+# Apply order to both matrices
 k_fc_mat <- k_fc_mat[genes_full_ordered, ]
 b_fc_mat <- b_fc_mat[genes_full_ordered, ]
 
+# Define matrix limits
 k_lim <- max(abs(log2(pairwise_table$diff_k)))
 b_lim <- max(abs(log2(pairwise_table$diff_b)))
+par_lim <- max(c(k_lim, b_lim))
 
 # Set colours to colour blind friendly palette
 upset_pal <- brewer.pal(2, "Dark2")
 upset_col <- colorRampPalette(c(upset_pal[2], "white", upset_pal[1]))(50)
-breaks_k  <- seq(-k_lim, k_lim, length.out = 50)
-breaks_b  <- seq(-b_lim, b_lim, length.out = 50)
+# Define breaks for colour changes
+breaks <- seq(-par_lim, par_lim, length.out = 50)
+
+# Combine matrices
+# Build combined column order by appending cancer names
+combined_cols <- unlist(lapply(cancers_ordered, function(c) {
+    c(paste0(c, "_k"), paste0(c, "_b"))
+}))
+
+# Column-bind k and b for each cancer
+combined_mat <- do.call(cbind, lapply(cancers_ordered, function(c) {
+    cbind(k_fc_mat[, c], b_fc_mat[, c])
+}))
+# Rename columns
+colnames(combined_mat) <- combined_cols
 
 
-pheatmap(k_fc_mat,
+# Plot heatmap of all genes
+pheatmap(combined_mat,
          cluster_rows = FALSE,
          cluster_cols = FALSE,
          show_rownames = FALSE,
          color = upset_col,
-         breaks = breaks_k,
-         main = "Fold-change in k (log2) — Pre vs Post Treatment")
-pheatmap(b_fc_mat,
-         cluster_rows = FALSE,
-         cluster_cols = FALSE,
-         show_rownames = FALSE,
-         color = upset_col,
-         breaks = breaks_b,
-         main = "Fold-change in b (log2) — Pre vs Post Treatment")
+         breaks = breaks,
+         main = "Combined k & b Fold-change (log2) — Pre vs Post Treatment")
 
 ```
+
+*Figure 1a: Heatmap of fold-change across all genes.*
+
 ```{r heatmaps_sig, message=FALSE, warning=FALSE}
 
-### --- SIGNIFICANT K MATRIX ---
+# Create list of all significant genes
+sig_union <- unique(pairwise_table$genes[pairwise_table$p_k_adj < 0.05 |
+                                           pairwise_table$p_b_adj < 0.05])
 
-sig_k_genes <- unique(pairwise_table$genes[pairwise_table$p_k_adj < 0.05])
-sig_k_table <- pairwise_table[pairwise_table$genes %in% sig_k_genes, ]
+# Create table with only these genes
+sig_union_table <- pairwise_table[pairwise_table$genes %in% sig_union, ]
 
-# Mask non-significant values (few genes significant across cancers)
-sig_k_table$diff_k <- ifelse(
-  sig_k_table$p_k_adj < 0.05,
-  sig_k_table$diff_k,
-  1
-)
+# Mask non-significant values separately for k and b
+sig_union_table$diff_k <- ifelse(sig_union_table$p_k_adj < 0.05,
+                                 sig_union_table$diff_k,
+                                 1)
+sig_union_table$diff_b <- ifelse(sig_union_table$p_b_adj < 0.05,
+                                 sig_union_table$diff_b,
+                                 1)
 
-sig_k_list <- split(sig_k_table, sig_k_table$cancer)
-sig_k_mat <- log2(make_fc_matrix(sig_k_list, "diff_k"))
+# Split by cancer
+sig_union_list_k <- split(sig_union_table, sig_union_table$cancer)
+sig_union_list_b <- sig_union_list_k  
 
-# Order only the sig_k genes using the full-matrix order
-sig_k_order <- genes_full_ordered[genes_full_ordered %in% sig_k_genes]
-sig_k_mat <- sig_k_mat[sig_k_order, cancers_ordered]
+# Build matrices
+sig_k_mat <- log2(make_fc_matrix(sig_union_list_k, "diff_k"))
+sig_b_mat <- log2(make_fc_matrix(sig_union_list_b, "diff_b"))
 
-### --- SIGNIFICANT B MATRIX ---
+# Apply consistent gene and cancer order
+sig_order <- genes_full_ordered[genes_full_ordered %in% sig_union]
+sig_k_mat <- sig_k_mat[sig_order, cancers_ordered]
+sig_b_mat <- sig_b_mat[sig_order, cancers_ordered]
 
-sig_b_genes <- unique(pairwise_table$genes[pairwise_table$p_b_adj < 0.05])
-sig_b_table <- pairwise_table[pairwise_table$genes %in% sig_b_genes, ]
+# Combine matrices into one
+sig_combined_mat <- do.call(cbind, lapply(cancers_ordered, function(c) {
+    cbind(sig_k_mat[, c], sig_b_mat[, c])
+}))
+colnames(sig_combined_mat) <- combined_cols
 
-# Mask non-significant values (few genes significant across cancers)
-sig_b_table$diff_b <- ifelse(
-  sig_b_table$p_b_adj < 0.05,
-  sig_b_table$diff_b,
-  1
-)
-
-sig_b_list <- split(sig_b_table, sig_b_table$cancer)
-sig_b_mat <- log2(make_fc_matrix(sig_b_list, "diff_b"))
-
-# Order only the sig_b genes using the full-matrix order
-sig_b_order <- genes_full_ordered[genes_full_ordered %in% sig_b_genes]
-sig_b_mat <- sig_b_mat[sig_b_order, cancers_ordered]
-
-### --- PLOTTING ---
-
-pheatmap(sig_k_mat,
+# Plot all genes that are significant in at least one group
+pheatmap(sig_combined_mat,
          cluster_rows = FALSE,
          cluster_cols = FALSE,
          show_rownames = FALSE,
          color = upset_col,
-         breaks = breaks_k,
-         main = "Fold-change in k (log2) — Significant Genes")
+         breaks = breaks,
+         main = "Combined k & b Fold-change (log2) — Significant Genes")
 
-pheatmap(sig_b_mat,
-         cluster_rows = FALSE,
-         cluster_cols = FALSE,
-         show_rownames = FALSE,
-         color = upset_col,
-         breaks = breaks_b,
-         main = "Fold-change in b (log2) — Significant Genes")
 
 ```
+
+*Figure 1b: Heatmap of fold-change across genes that are significant in at least one group parameter.*
+
+Can also check how cancer-specific each significant gene is by comparing with an upset plot (Figs 2a and 2b). These are like Venn Diagrams but can be clearer for higher order data.
 
 ```{r upset, message=FALSE, warning=FALSE}
 
-sig_k_only <- sig_k_table[sig_k_table$p_k_adj < 0.05, ]
+# Create table of significant k results
+sig_k_only <- sig_union_table[sig_union_table$p_k_adj < 0.05, ]
 
+# Make a list of which genes are significant in each cancer
 listInput_k <- list(
   Carcinoma        = sig_k_only$genes[
     sig_k_only$cancer == "Carcinoma"],
@@ -818,8 +914,8 @@ listInput_k <- list(
     sig_k_only$cancer == "Breast_(ER+)"]
 )
 
-sig_b_only <- sig_b_table[sig_b_table$p_b_adj < 0.05, ]
-
+# Repeat above for b
+sig_b_only <- sig_union_table[sig_union_table$p_b_adj < 0.05, ]
 listInput_b <- list(
   Carcinoma        = sig_b_only$genes[
     sig_b_only$cancer == "Carcinoma"],
@@ -831,9 +927,11 @@ listInput_b <- list(
     sig_b_only$cancer == "Breast_(ER+)"]
 )
 
+# Convert lists to data frames
 upset_df_k <- fromList(listInput_k)
 upset_df_b <- fromList(listInput_b)
 
+# Pass these data frames to plots
 ComplexUpset::upset(
   upset_df_k,
   intersect = colnames(upset_df_k),
@@ -850,7 +948,13 @@ ComplexUpset::upset(
     panel.background = element_rect(fill = "white"),
     plot.background = element_rect(fill = "white")
   )
+```
 
+*Figure 2a: Comparison of how many genes have significant switch-off chance (k) change across cancers.*
+
+```{r upset_b, message=FALSE, warning=FALSE}
+
+# Repeat plot for other parameter
 ComplexUpset::upset(
   upset_df_b,
   intersect = colnames(upset_df_b),
@@ -870,6 +974,10 @@ ComplexUpset::upset(
 
 ```
 
+*Figure 2b: Comparison of how many genes have significant burst (b) change across cancers.*
+
+Finally look up ontology information using the STRING API. Start by mapping the genes to their STRING IDs.
+
 ```{r string_start, message=FALSE, warning=FALSE}
 
 mapped_string_genes <- rba_string_map_ids(
@@ -884,6 +992,8 @@ sig_b_only$stringId <- mapped_string_genes$stringId[ match(sig_b_only$genes,
                                            mapped_string_genes$queryItem) ]
 
 ```
+
+Next look up all the groups large enough to get enrichment information. Save plots.
 
 ```{r string_enrichment, message=FALSE, warning=FALSE}
 
@@ -920,6 +1030,8 @@ writePNG(rba_string_enrichment_image(
   "../3_Real_Data/figs/string_enrichment_b_breast_h_up.png")
 
 ```
+
+For smaller groups that failed to retrieve significant enrichment results simply plot the network. Save results again.
 
 ```{r string_network, message=FALSE, warning=FALSE}
 
@@ -996,11 +1108,13 @@ writePNG(rba_string_network_image(
   species = 9606
   ), 
   "../3_Real_Data/figs/string_network_k_breast_t.png")
+
 ```
+Finally analyse patient information (Fig 3). This was to see who results could be applied to, but all studies included in this analysis did not include patient sex or ethnicity. However, for the breast studies while no sex information was included, women make up more than 99% of cases so this is likely reflected in the samples. Ethnicity is not reported, study took place in Belgium which is majority white. Similarly, for Carcinoma the data is from Stanford, USA, a predominantly white area. They did state both male and female patients were included, but did not disclose the percentages.
 
 ```{r sex_ethnic_analysis, message=FALSE, warning=FALSE, fig.width=12, fig.height=6}
 
-# If the patient information exists
+# If the patient information doesn't exist
 if (!file.exists("../3_Real_Data/filt_patient_data.csv")) {
   
   # Create new table of patient information
@@ -1042,6 +1156,7 @@ if (!file.exists("../3_Real_Data/filt_patient_data.csv")) {
   patient_table <- read.csv("../3_Real_Data/filt_patient_data.csv")
 }
 
+# Plot the sex and ethnicity information
 sex_plot <- ggplot(patient_table, aes(x = cancer_type, fill = sex)) +
   geom_bar() +
   theme_minimal(base_size = 14) +
@@ -1073,5 +1188,4 @@ grid.arrange(sex_plot, ethnicity_plot, ncol = 2)
 
 ```
 
-Breast (all): No sex information, but women more than 99% of cases so likely reflected. Ethnicity not reported, study took place in Belgium.
-Carcinoma: Little sex information, just says it involved 11 patients, both males and females. No ethnicity information, study took place in USA (Stanford?).
+*Figure 3: Patient sex and ethnicity information*
