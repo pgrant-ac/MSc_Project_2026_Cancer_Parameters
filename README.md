@@ -8,9 +8,11 @@ Different parts of the project are saved in different folders:
 * **3_Real_Data:** Using everything learned during simulations to estimate parameters of real biological data. 
 * **estimator_function:** key functions developed during the project for estimating that can easily be used on any gene count data. Use '?function_name' to read documentation.
 
-There are html documents available for all 3 sections, as well as seperate saved figures. While immunotherapy's effect on cancer cells is the focus of this study, the methods were designed to be reproducible on any gene count data.
+There are html documents available for all markdown files so outputs can be viewed without downloading and running everything, as well as separate saved figures. 
+While immunotherapy's effect on cancer cells is the focus of this study, the methods were designed to be reproducible on any gene count data.
 
-
-The RNAseq data was obtained from the researcher's GitHub found here:  
+The RNAseq data was obtained from this link:
+[https://zenodo.org/records/14511579](https://zenodo.org/records/14511579)
+ And the corresponding GitHub for this data source found here:  
 [https://github.com/MahnoorNGondal/scRNA-seq-ICB-cohorts](https://github.com/MahnoorNGondal/scRNA-seq-ICB-cohorts)
 
