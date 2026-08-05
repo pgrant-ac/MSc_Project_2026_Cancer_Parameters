@@ -60,7 +60,7 @@ nb_mle <- function(vals, depths = NULL){
     return(list(r_est = NA, p_est = 1, lambda = mean(vals)))
   }
   
-  # Negative log-likelihood
+  # Quasi-likelihood
   quasi_nb <- function(par, y, q) {
     r <- exp(par[1])
     p <- plogis(par[2])
