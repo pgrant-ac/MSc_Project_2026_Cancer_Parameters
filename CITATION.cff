@@ -1,0 +1,11 @@
+cff-version: 1.0.0
+message: "If you use this code, please cite it as below."
+authors:
+- family-names: "Grant"
+  given-names: "Perrin"
+  orcid: "https://orcid.org/0009-0004-0473-923X"
+title: "Masters Project: Estimating Gene Burst Kinetics"
+version: 1.0
+doi: 10.5281/zenodo.21838365
+date-released: 2026-08-07
+url: "https://github.com/pgrant-ac/MSc_Project_2026_Cancer_Parameters"
