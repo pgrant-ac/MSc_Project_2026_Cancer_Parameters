@@ -658,7 +658,7 @@ print(glue(
   ))
 
 ```
-Now negative binomial estimates are finalised, can convert them into burst kinetics. A gene's expression can be described by it's burstiness (b), or how many copies are typically transcribed, and it's likelihood of being off (k). Because only relative sequencing depth is used these estimates are also relative and cannot be taken as exact values. Another custom function is used to convert these, using the equations:
+Now negative binomial estimates are finalised, can convert them into burst kinetics. A gene's expression can be described by it's burst frequency (b) (number of times transcription is turned on/bursts per mRNA lifespan), and burst size (k) (how many copies transcribed per burst). Because only relative sequencing depth is used these estimates are also relative and cannot be taken as exact values. Another custom function is used to convert these, using the equations:
 
 k = r
 b = (1-p)/(p^2)
@@ -684,9 +684,8 @@ Now a pairwise analysis can be utilised to quantify the difference between pre a
 ```{r analysis_func, message=FALSE, warning=FALSE}
 
 pairwise_test <- function(df1, df2) {
-  #' Function to calculate test statistics for k (rate at which a gene 
-  #' switches from off to on) and b (burst size, how many copies created while 
-  #' on) between pre and post treatment for a cancer. Also calculates 
+  #' Function to calculate test statistics for k (burst size) and b (burst 
+  #' frequency) between pre and post treatment for a cancer. Also calculates 
   #' proportional fold-change in estimated k and b as well as direction.
   
   # merge by gene
@@ -798,7 +797,7 @@ make_fc_matrix <- function(df_list, value_col) {
 k_fc_mat <- log2(make_fc_matrix(pairwise_results, "diff_k"))
 b_fc_mat <- log2(make_fc_matrix(pairwise_results, "diff_b"))
 
-# Define row order based on burstiness (more changes)
+# Define row order by clustering on burst frequency (more changes)
 row_order_full <- hclust(dist(b_fc_mat))$order
 genes_full_ordered <- rownames(b_fc_mat)[row_order_full]
 cancers_ordered <- colnames(b_fc_mat)
@@ -950,7 +949,7 @@ ComplexUpset::upset(
   )
 ```
 
-*Figure 2a: Comparison of how many genes have significant switch-off chance (k) change across cancers.*
+*Figure 2a: Comparison of how many genes have significant burst size (k) change across cancers.*
 
 ```{r upset_b, message=FALSE, warning=FALSE}
 
@@ -974,7 +973,7 @@ ComplexUpset::upset(
 
 ```
 
-*Figure 2b: Comparison of how many genes have significant burst (b) change across cancers.*
+*Figure 2b: Comparison of how many genes have significant burst frequency (b) change across cancers.*
 
 Finally look up ontology information using the STRING API. Start by mapping the genes to their STRING IDs.
 

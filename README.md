@@ -1,5 +1,5 @@
 # MSc_Project_2026_Cancer_Parameters
-Collection of code used for my MSc Data Science for Biology dissertation project entitled: "Comparing Gene Activity Patterns in Pre and Post Immunotherapy Cells".
+Collection of code used for my MSc Data Science for Biology dissertation project entitled: "Comparing Gene Activity Patterns in Pre and Post-Immunotherapy Cells".
 
 Different parts of the project are saved in different folders:
 
@@ -9,9 +9,9 @@ Different parts of the project are saved in different folders:
 * **estimator_function:** key functions developed during the project for estimating that can easily be used on any gene count data. Use '?function_name' to read documentation.
 
 There are html documents available for all markdown files so outputs can be viewed without downloading and running everything, as well as separate saved figures. 
-While immunotherapy's effect on cancer cells is the focus of this study, the methods were designed to be reproducible on any gene count data.
+While immunotherapy's effect on cancer cells was the test case for this study, the methods were designed to be reproducible on any gene count data.
 
-The RNAseq data was obtained from this link:
+The RNA-Seq data was obtained from this link (Gondal et al., 2025):
 [https://zenodo.org/records/14511579](https://zenodo.org/records/14511579)
 
  And the corresponding GitHub for this data source found here:  

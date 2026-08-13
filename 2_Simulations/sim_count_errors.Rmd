@@ -936,3 +936,60 @@ knitr::include_graphics(c(
 
 ```
 *Figure 4: Contour plots displaying how errors increase in parameter space. The root mean square error (RMSE) at each combination of estimated size (r) and probability (p) of a Negative Binomial are plotted, with the mean simulated number of cells and proportion of zeroes.*
+
+Create updated plots with new colours at supervisors request.
+
+```{r contours_updated_for_report, message=FALSE, warning=FALSE}
+
+# Create example values for probability and size
+grid_length = 250
+p_grid <- seq(0.01, 0.99, length.out = grid_length)
+r_grid <- seq(   1,  150, length.out = grid_length)
+  
+# Place these values in a matrix to create a grid of values
+grid <- expand.grid(
+  pred_probs_corr = p_grid,
+  pred_sizes_corr = r_grid,
+  cells           = mean(sim_df$cells),
+  zero_prop_corr  = mean(sim_df$zero_prop_corr)
+)
+  
+# Use the model to predict 95% error size for each of these grid points
+errprob95 <- abs(predict(fit_err_prob, newdata = grid))
+errsize95 <- abs(predict(fit_err_size, newdata = grid))
+# Convert these predictions into a matrix
+errprob95_mat <- matrix(errprob95, nrow = length(p_grid), ncol = length(r_grid))
+errsize95_mat <- matrix(errsize95, nrow = length(p_grid), ncol = length(r_grid))
+  
+# Define the NEW colours
+cols <- colorRampPalette(c("#FFEDA0", "#FD8D3C", "#B10026"))
+  
+filled.contour(
+    x = p_grid,
+    y = r_grid,
+    z = errsize95_mat,
+    color.palette = cols,
+    xlab = "Predicted Probability (p)",
+    ylab = "Predicted Size (r)",
+    main = "Size RMSE Surface",
+    plot.axes = {
+      axis(1)
+      axis(2, at = seq(0, 150, by = 30), labels = seq(0, 150, by = 30))
+      }
+  )
+
+filled.contour(
+    x = p_grid,
+    y = r_grid,
+    z = errprob95_mat,
+    color.palette = cols,
+    xlab = "Predicted Probability (p)",
+    ylab = "Predicted Size (r)",
+    main = "Probability RMSE Surface",
+    plot.axes = {
+      axis(1)
+      axis(2, at = seq(0, 150, by = 30), labels = seq(0, 150, by = 30))
+      }
+  )
+
+```
